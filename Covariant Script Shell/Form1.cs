@@ -9,7 +9,10 @@ namespace Covariant_Script_Shell
     public partial class Form1 : Form
     {
         private Process CsProcess = null;
+        private Thread Worker1 = null;
+        private Thread Worker2 = null;
         private int CharBuffSize = 1;
+        private string LineBuff = "";
         internal ProgramSettings Settings { get; set; } = new ProgramSettings();
         public Form1()
         {
@@ -73,6 +76,28 @@ namespace Covariant_Script_Shell
             }
         }
 
+        private void StdOutWorker()
+        {
+            while (CsProcess != null && !CsProcess.HasExited)
+            {
+                char[] bs = new char[CharBuffSize];
+                if (CsProcess.StandardOutput.Read(bs, 0, CharBuffSize) > 0)
+                    BeginInvoke(new Action(() => { textBox1.AppendText(new string(bs)); }));
+                Thread.Sleep(1);
+            }
+        }
+
+        private void StdErrWorker()
+        {
+            Thread.CurrentThread.Priority = ThreadPriority.Highest;
+            while (CsProcess != null && !CsProcess.HasExited)
+            {
+                char[] bs = new char[CharBuffSize];
+                if (CsProcess.StandardError.Read(bs, 0, CharBuffSize) > 0)
+                    BeginInvoke(new Action(() => { textBox1.AppendText(new string(bs)); }));
+            }
+        }
+
         void StartProcess()
         {
             if (CsProcess != null && !CsProcess.HasExited)
@@ -96,11 +121,11 @@ namespace Covariant_Script_Shell
                 {
                     StartInfo = psi
                 };
-                CsProcess.EnableRaisingEvents = true;
                 CsProcess.Start();
-                backgroundWorker1.RunWorkerAsync();
-                backgroundWorker2.RunWorkerAsync();
-                label1.Text = "Interpreter Process running";
+                Worker1 = new Thread(new ThreadStart(StdOutWorker));
+                Worker2 = new Thread(new ThreadStart(StdErrWorker));
+                Worker1.Start();
+                Worker2.Start();
             }
             catch (System.ComponentModel.Win32Exception)
             {
@@ -110,66 +135,82 @@ namespace Covariant_Script_Shell
             }
         }
 
+        void KillProcess()
+        {
+            if (CsProcess != null && !CsProcess.HasExited)
+            {
+                Worker1.Abort();
+                Worker2.Abort();
+                CsProcess.Kill();
+            }
+        }
+
         private void EnterLine()
         {
             if (CsProcess == null || CsProcess.HasExited)
                 StartProcess();
-            textBox1.AppendText(textBox2.Text + "\r\n");
-            CsProcess.StandardInput.WriteLine(textBox2.Text);
-            textBox2.Text = "";
+            CsProcess.StandardInput.WriteLine(LineBuff);
+            LineBuff = "";
         }
 
-        private void textBox2_KeyDown(object sender, KeyEventArgs e)
+        private bool keyValid(char key)
+        {
+            return key != '\b';
+        }
+
+        private void textBox1_KeyPress(object sender, KeyPressEventArgs e)
+        {
+            if (keyValid(e.KeyChar))
+            {
+                LineBuff += e.KeyChar;
+                textBox1.AppendText(e.KeyChar.ToString());
+            }
+        }
+
+        private void textBox1_KeyDown(object sender, KeyEventArgs e)
         {
             switch (e.KeyCode)
             {
                 case Keys.Enter:
                     EnterLine();
+                    textBox1.AppendText("\r\n");
+                    break;
+                case Keys.Back:
+                    if (LineBuff.Length > 0)
+                    {
+                        LineBuff = LineBuff.Substring(0, LineBuff.Length - 1);
+                        textBox1.Text = textBox1.Text.Substring(0, textBox1.TextLength - 1);
+                        textBox1.Select(textBox1.TextLength, 0);
+                        textBox1.ScrollToCaret();
+                    }
                     break;
             }
         }
 
-        private void button4_Click(object sender, EventArgs e)
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            KillProcess();
+        }
+
+        private void rEBOOTToolStripMenuItem_Click(object sender, EventArgs e)
         {
             StartProcess();
         }
 
-        private void backgroundWorker1_DoWork(object sender, System.ComponentModel.DoWorkEventArgs e)
+        private void sTOPToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            while (CsProcess != null && !CsProcess.HasExited)
-            {
-                char[] bs = new char[CharBuffSize];
-                if (CsProcess.StandardOutput.Read(bs, 0, CharBuffSize) > 0)
-                    BeginInvoke(new Action(() => { textBox1.AppendText(new string(bs)); }));
-                Thread.Sleep(1);
-            }
+            KillProcess();
+            textBox1.AppendText("\r\n[Process exit with code " + CsProcess.ExitCode + "]\r\n");
         }
 
-        private void backgroundWorker2_DoWork(object sender, System.ComponentModel.DoWorkEventArgs e)
+        private void cLEARToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            Thread.CurrentThread.Priority = ThreadPriority.Highest;
-            while (CsProcess != null && !CsProcess.HasExited)
-            {
-                char[] bs = new char[CharBuffSize];
-                if (CsProcess.StandardError.Read(bs, 0, CharBuffSize) > 0)
-                    BeginInvoke(new Action(() => { textBox1.AppendText(new string(bs)); }));
-            }
+            textBox1.Clear();
         }
 
-        private void button1_Click(object sender, EventArgs e)
+        private void toolStripStatusLabel1_Click(object sender, EventArgs e)
         {
-            EnterLine();
-        }
-
-        private void button2_Click(object sender, EventArgs e)
-        {
-            textBox1.Text = "";
-        }
-
-        private void button3_Click(object sender, EventArgs e)
-        {
-            CsProcess.Kill();
-            label1.Text = "Interpreter Process killed";
+            Process.Start(Configs.Urls.WebSite);
         }
     }
 }
